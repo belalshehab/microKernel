@@ -2,43 +2,47 @@
 #include <unistd.h>
 #include <signal.h>
 
+pid_t spawn_process(const char* process_name, const char* binary_path) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::cerr << "[Orchestrator] Fork failed to fork: " << process_name << ": " << strerror(errno) << std::endl;
+        return -1;
+    }
+    if (pid == 0) {
+        // child process
+        execl(binary_path, process_name, nullptr);
+        // we shouldn't reach here unless exec fails
+        std::cerr << "[Orchestrator] Exec failed for " << process_name << ": " << strerror(errno) << std::endl;
+        exit(1);
+    }
+    // parent process
+    std::cout << "[Orchestrator] Spawned Process (PID: " << pid << ")\n";
+    return pid;
+}
+
 int main()
 {
     std::cout << "[Orchestrator] Starting microkernel...\n";
     std::cout << "[Orchestrator] PID: " << getpid() << "\n";
 
-    pid_t hasher_pid = fork();
+    int hasherSocketPair[2];
+    int signerSocketPair[2];
+
+
+
+    pid_t hasher_pid = spawn_process("hasher", "./hasher");
     if (hasher_pid < 0) {
-        std::cerr << "[Orchestrator] Fork failed to fork hasher: " << strerror(errno) << std::endl;
         return 1;
     }
 
-    if (hasher_pid == 0) {
-        // Child process - will become Hasher
-        std::cout << "[Hasher] Process started, PID: " << getpid() << "\n";
-        std::cout << "[Hasher] Waiting for work...\n";
-        sleep(5);
-        std::cout << "[Hasher] Exiting.\n";
-        return 0;
-    }
-
-    pid_t signer_pid = fork();
+    pid_t signer_pid = spawn_process("signer", "./signer");
     if (signer_pid < 0) {
-        std::cerr << "[Orchestrator] Fork failed to fork signer: " << strerror(errno) << std::endl;
-        // Clean up hasher
+        // Clean up hasher if signer fails to spawn
         kill(hasher_pid, SIGTERM);
         waitpid(hasher_pid, nullptr, 0);
         return 1;
     }
 
-    if (signer_pid == 0) {
-        // Child process - will become Signer
-        std::cout << "[Signer] Process started, PID: " << getpid() << "\n";
-        std::cout << "[Signer] Waiting for work...\n";
-        sleep(5);
-        std::cout << "[Signer] Exiting.\n";
-        return 0;
-    }
     // Parent - orchestrator
     std::cout << "[Orchestrator] Spawned Hasher (PID: " << hasher_pid << ")\n";
     std::cout << "[Orchestrator] Spawned Signer (PID: " << signer_pid << ")\n";
