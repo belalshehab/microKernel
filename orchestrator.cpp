@@ -2,8 +2,9 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <fcntl.h>
 
-pid_t spawn_process(const char* process_name, const char* binary_path, int socketPair[2], int otherSocketPair[2]) {
+pid_t spawn_process(const char* process_name, const char* binary_path, int socketPair[2]) {
     pid_t pid = fork();
     if (pid < 0) {
         std::cerr << "[Orchestrator] Fork failed to fork: " << process_name << ": " << strerror(errno) << std::endl;
@@ -11,9 +12,9 @@ pid_t spawn_process(const char* process_name, const char* binary_path, int socke
     }
     if (pid == 0) {
         // child process
+        fcntl(socketPair[1], F_SETFD, 0);
         close(socketPair[0]);
-        close(otherSocketPair[0]);
-        close(otherSocketPair[1]);
+
         char sockFDStr[16];
         snprintf(sockFDStr, sizeof(sockFDStr), "%d", socketPair[1]);
 
@@ -41,6 +42,8 @@ int main()
         return 1;
     }
     std::cout << "[Orchestrator] Created socket pair for Hasher\n";
+    fcntl(hasherSocketPair[0], F_SETFD, FD_CLOEXEC);
+    fcntl(hasherSocketPair[1], F_SETFD, FD_CLOEXEC);
 
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, signerSocketPair) < 0) {
         std::cerr << "[Orchestrator] Failed to create signer socket pair: " << strerror(errno) << "\n";
@@ -49,13 +52,16 @@ int main()
         return 1;
     }
 
+    fcntl(signerSocketPair[0], F_SETFD, FD_CLOEXEC);
+    fcntl(signerSocketPair[1], F_SETFD, FD_CLOEXEC);
 
-    pid_t hasher_pid = spawn_process("hasher", "./hasher", hasherSocketPair, signerSocketPair);
+
+    pid_t hasher_pid = spawn_process("hasher", "./hasher", hasherSocketPair);
     if (hasher_pid < 0) {
         return 1;
     }
 
-    pid_t signer_pid = spawn_process("signer", "./signer", signerSocketPair, hasherSocketPair);
+    pid_t signer_pid = spawn_process("signer", "./signer", signerSocketPair);
 
     if (signer_pid < 0) {
         // Clean up hasher if signer fails to spawn
