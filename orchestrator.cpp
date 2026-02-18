@@ -4,6 +4,8 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 
+#include "ipc_common.h"
+
 pid_t spawn_process(const char* process_name, const char* binary_path, int socketPair[2]) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -29,6 +31,31 @@ pid_t spawn_process(const char* process_name, const char* binary_path, int socke
     return pid;
 }
 
+bool connectToService(int socketFD, const char* serviceName) {
+    Message message;
+    if (!receiveMessage(socketFD, message, "Orchestrator")) {
+        std::cerr << "[Orchestrator] Failed to receive CONNECT_REQUEST from " << serviceName << "\n";
+        return false;
+    }
+    if (message.type != CONNECT_REQUEST) {
+        std::cerr << "[Orchestrator] Unexpected message type from " << serviceName << ": " << message.type << "\n";
+        return false;
+    }
+
+    std::cout << "[Orchestrator] Received CONNECT_REQUEST from " << serviceName << ": " << message.payload << "\n";
+
+    Message response;
+    response.type = CONNECT_RESPONSE;
+    response.payloadSize = snprintf(response.payload, sizeof(response.payload), "Connection established");
+
+    if (!sendMessage(socketFD, response, "Orchestrator")) {
+        std::cerr << "[Orchestrator] Failed to send CONNECT_RESPONSE to " << serviceName << "\n";
+        return false;
+    }
+    std::cout << "[Orchestrator] Sent CONNECT_RESPONSE to " << serviceName << "\n";
+    return true;
+
+}
 int main()
 {
     std::cout << "[Orchestrator] Starting microkernel...\n";
@@ -45,6 +72,7 @@ int main()
     fcntl(hasherSocketPair[0], F_SETFD, FD_CLOEXEC);
     fcntl(hasherSocketPair[1], F_SETFD, FD_CLOEXEC);
 
+    std::cout << "[Orchestrator] Created socket pair for Signer\n";
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, signerSocketPair) < 0) {
         std::cerr << "[Orchestrator] Failed to create signer socket pair: " << strerror(errno) << "\n";
         close(hasherSocketPair[0]);
@@ -60,6 +88,7 @@ int main()
     if (hasher_pid < 0) {
         return 1;
     }
+    std::cout << "[Orchestrator] Spawned Hasher (PID: " << hasher_pid << ")\n";
 
     pid_t signer_pid = spawn_process("signer", "./signer", signerSocketPair);
 
@@ -69,11 +98,18 @@ int main()
         waitpid(hasher_pid, nullptr, 0);
         return 1;
     }
-
-    // Parent - orchestrator
-    std::cout << "[Orchestrator] Spawned Hasher (PID: " << hasher_pid << ")\n";
     std::cout << "[Orchestrator] Spawned Signer (PID: " << signer_pid << ")\n";
-    std::cout << "[Orchestrator] Monitoring child processes...\n";
+
+    std::cout << "[Orchestrator] Connecting to child processes...\n";
+
+    if (!connectToService(hasherSocketPair[0], "Hasher")) {
+        std::cerr << "[Orchestrator] Failed to connect to Hasher service\n";
+        return 1;
+    }
+    if (!connectToService(signerSocketPair[0], "Signer")) {
+        std::cerr << "[Orchestrator] Failed to connect to Signer service\n";
+        return 1;
+    }
 
     // Wait for both children to complete
     int status;
