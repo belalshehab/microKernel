@@ -4,6 +4,7 @@
 
 ValidatorImpl::ValidatorImpl(kj::StringPtr name)
     : m_name(name)
+    , m_orchestrator(capnp::Capability::Client(nullptr).castAs<Orchestrator>())
 {
 }
 

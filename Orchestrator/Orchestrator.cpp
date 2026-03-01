@@ -5,6 +5,14 @@
 #include "Orchestrator.h"
 
 
+// Default constructor: initializes both clients to null caps.
+// Clients are injected later via setValidator() / setListener().
+OrchestratorImpl::OrchestratorImpl()
+    : m_validator(capnp::Capability::Client(nullptr).castAs<Validator>())
+    , m_listener(capnp::Capability::Client(nullptr).castAs<NetworkListener>())
+{
+}
+
 OrchestratorImpl::OrchestratorImpl(Validator::Client validator, NetworkListener::Client listener) :
     m_validator(kj::mv(validator))
 ,m_listener(kj::mv(listener))

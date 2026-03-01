@@ -13,12 +13,16 @@ class NetworkListenerImpl final: public NetworkListener::Server {
 public:
     explicit NetworkListenerImpl(kj::StringPtr name);
 
+    // Called by main() after rpc is constructed and bootstrap() is available
+    void setOrchestrator(Orchestrator::Client orchestrator) {
+        m_orchestrator = kj::mv(orchestrator);
+    }
+
     kj::Promise<void> getName(GetNameContext context) override;
     kj::Promise<void> ping(PingContext context) override;
     kj::Promise<void> startListening(StartListeningContext context) override;
 
 private:
     std::string m_name;
+    Orchestrator::Client m_orchestrator;
 };
-
-
