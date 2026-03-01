@@ -17,16 +17,28 @@ int main() {
     // Single event loop for the entire process lifetime
     auto ioContext = kj::setupAsyncIo();
 
-    // ── Spawn both services ───────────────────────────────────────────────────
-    auto validatorConn = spawnAndConnect(services, "validator", "./validator", ioContext);
+    // ── Construct the broker first (empty) ───────────────────────────────────
+    // We need the Orchestrator::Client before spawning so each child gets it
+    // as a bootstrap capability over their socket. Clients are injected via
+    // setters once the connections are established.
+    auto  orchestratorOwned = kj::heap<OrchestratorImpl>();
+    OrchestratorImpl* orchestratorPtr = orchestratorOwned.get();
+    Orchestrator::Client orchestratorCap = kj::mv(orchestratorOwned);
+
+    // ── Spawn both services, exporting the orchestrator cap to each ──────────
+    auto validatorConn = spawnAndConnect(services, "validator", "./validator", ioContext, orchestratorCap);
     if (!validatorConn) return 1;
 
-    auto listenerConn = spawnAndConnect(services, "networkListener", "./networkListener", ioContext);
+    auto listenerConn = spawnAndConnect(services, "networkListener", "./networkListener", ioContext, orchestratorCap);
     if (!listenerConn) return 1;
 
-    // ── Get typed clients ─────────────────────────────────────────────────────
+    // ── Get typed clients from each connection ────────────────────────────────
     auto validatorClient = validatorConn->getClient<Validator>();
     auto listenerClient  = listenerConn->getClient<NetworkListener>();
+
+    // ── Inject live clients into the broker ───────────────────────────────────
+    orchestratorPtr->setValidator(validatorConn->getClient<Validator>());
+    orchestratorPtr->setListener(listenerConn->getClient<NetworkListener>());
 
     // ── Ping both to confirm liveness ─────────────────────────────────────────
     validatorClient.pingRequest().send().wait(ioContext.waitScope);
@@ -46,17 +58,7 @@ int main() {
     startListeningRequest.send().wait(ioContext.waitScope);
     std::cout << "[Orchestrator] NetworkListener startListening(12345) OK\n";
 
-    // ── Construct and hold the Orchestrator broker ────────────────────────────
-    // Clients are retrieved again since getClient() re-casts the same bootstrap cap.
-    auto orchestratorImpl = kj::heap<OrchestratorImpl>(
-        validatorConn->getClient<Validator>(),
-        listenerConn->getClient<NetworkListener>()
-    );
-
-    std::cout << "[Orchestrator] Broker ready. Holding " << 2 << " live service capabilities.\n";
-
-    // TODO: serve orchestratorImpl over a socketpair so services can call back into it
-    // (next step: pass a second FD to each child at spawn time)
+    std::cout << "[Orchestrator] Broker ready. Both services connected and reachable.\n";
 
     return 0;
 }

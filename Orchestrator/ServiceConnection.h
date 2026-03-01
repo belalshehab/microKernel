@@ -18,8 +18,9 @@ struct ServiceConnection {
     kj::Own<kj::AsyncIoStream> stream;
     capnp::TwoPartyClient      rpcClient;
 
-    explicit ServiceConnection(kj::Own<kj::AsyncIoStream> s)
-        : stream(kj::mv(s)), rpcClient(*stream) {}
+    // bootstrapCap is what THIS side exports to the remote side over the stream.
+    ServiceConnection(kj::Own<kj::AsyncIoStream> s, capnp::Capability::Client bootstrapCap)
+        : stream(kj::mv(s)), rpcClient(*stream, kj::mv(bootstrapCap)) {}
 
     // Non-copyable, non-movable — stream and rpcClient hold internal pointers to each other.
     ServiceConnection(const ServiceConnection&)            = delete;
@@ -32,12 +33,14 @@ struct ServiceConnection {
 };
 
 // Spawns a child process, wraps its socket FD into a ServiceConnection,
-// and pings it to confirm liveness. Returns nullptr on failure.
+// and exports bootstrapCap to the child over the same stream.
+// Returns nullptr on failure.
 inline std::unique_ptr<ServiceConnection> spawnAndConnect(
-    ServicesRegistry&   services,
-    const std::string&  name,
-    const std::string&  binary,
-    kj::AsyncIoContext& ioContext)
+    ServicesRegistry&         services,
+    const std::string&        name,
+    const std::string&        binary,
+    kj::AsyncIoContext&       ioContext,
+    capnp::Capability::Client bootstrapCap)
 {
     ServiceHandle* handle = services.registerService(name.c_str(), binary.c_str());
     if (!handle) {
@@ -52,7 +55,5 @@ inline std::unique_ptr<ServiceConnection> spawnAndConnect(
         handle->orchestratorSocketFD(),
         kj::LowLevelAsyncIoProvider::TAKE_OWNERSHIP);
 
-    return std::make_unique<ServiceConnection>(kj::mv(stream));
+    return std::make_unique<ServiceConnection>(kj::mv(stream), kj::mv(bootstrapCap));
 }
-
-
