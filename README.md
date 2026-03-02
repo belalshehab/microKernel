@@ -1,55 +1,90 @@
-# cpp-microKernel
+# p2p-microkernel
 
-A microkernel runtime built from scratch in C++ — mainly as a learning project, but one I'm taking seriously enough to get the architecture right. The goal is to eventually reach something close to what L4-style microkernels do: a minimal core that manages process spawning, IPC, and capability-based service discovery, while everything else runs as isolated user-space services.
+### A High-Performance P2P Microkernel for Secure Gossip
+*Built with C++, Nim, nim-libp2p, Cap'n Proto, and libsodium*
+
+---
+
+A research implementation of a **capability-based P2P node** using microkernel-style process isolation. The goal is to demonstrate how security-critical and network-facing concerns can be separated at the process boundary — without sacrificing performance.
+
+The core idea: security-sensitive logic (private key access, block validation) lives in an isolated process that never touches the network. Network-facing logic (gossip ingestion) lives in a separate process written in Nim. Neither can directly access the other. The Orchestrator brokers every connection through typed capability references. If the network-facing process is compromised, the validator and its keys are untouched.
+
+---
+
+## Why this exists
+
+Most examples of Cap'n Proto RPC, Unix process isolation, and Ed25519 signing exist separately. This project puts them together in one working, buildable system — a reference for how these primitives compose into a real P2P node runtime.
+
+If you are building a decentralized node, a plugin runtime, or anything that needs process isolation with efficient IPC, the patterns here apply directly. The microkernel is not the point — **security by separation** is the point. The microkernel is just how you get there.
+
+---
+
+## Why this architecture
+
+### Why microkernel-style isolation?
+
+In a monolithic process, a vulnerability in the network layer can reach the signing keys. By splitting into isolated processes — each with its own address space and no shared memory by default — we contain the blast radius. The `Validator` holds the private keys and never touches the network. The `NetworkListener` touches the network and never sees the keys. The Orchestrator connects them only when needed, and only through a typed capability interface.
+
+This maps directly to how **L4-style microkernels** work: a minimal core manages process spawning and IPC, everything else runs as isolated user-space services.
+
+### Why Cap'n Proto?
+
+- **Native IPC over Unix socketpairs** — no TCP overhead, no loopback, direct kernel-buffered communication between local processes
+- **Capability-based RPC** — a service reference *is* an access token. You cannot call a service you were never given a capability to. This makes the security model explicit in the type system
+- **Zero-copy friendly** — Cap'n Proto's wire format is designed to be read in-place without deserialization. Combined with shared memory, it enables a true zero-copy fast path for bulk data
+- **Schema versioning and code generation** — no hand-rolled message structs, no silent corruption of binary fields
+
+### Why Nim for the NetworkListener?
+
+The `NetworkListener` is the process exposed to the network. It will eventually use **nim-libp2p** for gossip protocol support — the most complete libp2p implementation outside of Go. Nim gives us:
+
+- Memory safety without a borrow checker — important when writing network-facing code
+- Near-C performance with garbage collection tunable for low-latency workloads
+- First-class C FFI — calling into C++ is straightforward, which matters because Cap'n Proto has no Nim RPC implementation
+
+The tradeoff: Cap'n Proto RPC stays in C++. The Nim side handles gossip logic and calls into the C++ shim via `extern "C"` FFI. A small sacrifice for the convenience of the language and the power of nim-libp2p.
 
 ---
 
 ## Architecture
 
-The system uses a **capability broker pattern**. The Orchestrator is the central process — it spawns all services, holds live Cap'n Proto capability references to each one, and brokers connections between them. Services never connect to each other directly.
-
 ```
 ┌──────────────────────────────────────────────┐
-│                  Orchestrator                │
+│                  Orchestrator (C++)          │
 │  - spawns and monitors all services          │
 │  - holds Validator::Client                   │
 │  - holds NetworkListener::Client             │
 │  - brokers connectToValidator() requests     │
 └────────────┬─────────────────┬───────────────┘
              │  socketpair     │  socketpair
-     ┌───────▼──────┐   ┌──────▼──────────────┐
-     │  Validator   │   │   NetworkListener    │
-     │              │   │                      │
-     │  - signs /   │   │  - ingests P2P       │
-     │    validates │   │    gossip traffic    │
-     │    messages  │   │  - forwards to       │
-     │              │   │    Validator via     │
-     └──────────────┘   │    Orchestrator      │
-                        └──────────────────────┘
+     ┌───────▼──────┐   ┌──────▼──────────────────────┐
+     │  Validator   │   │   NetworkListener            │
+     │    (C++)     │   │   (Nim logic + C++ RPC shim) │
+     │              │   │                              │
+     │  - verifies  │   │  - ingests P2P gossip        │
+     │    Ed25519   │   │  - signs blocks before       │
+     │    block     │   │    forwarding                │
+     │    signatures│   │  - verifies validator's      │
+     │  - signs     │   │    signed response           │
+     │    responses │   └──────────────────────────────┘
+     └──────────────┘
 ```
 
 Communication flow when the NetworkListener receives a gossip packet:
 
 ```
-NetworkListener → orchestrator.connectToValidator()
-               → validator.validateBlock("gossip data")
-               → "Validated"
+NetworkListener  →  orchestrator.connectToValidator()
+                 →  validator.validateBlock(data, signature)
+                 ←  (isValid :Bool, validatorSignature :Data)
+NetworkListener  →  crypto_sign_verify_detached(validatorSignature)
+                    ↑ proves the response came from THIS validator and was not tampered with
 ```
 
-All traffic is brokered through the Orchestrator. Two sockets total — one per service.
+The validator never touches the network. The listener never sees the private key. All connections brokered through the Orchestrator.
 
 ---
 
-## What's been built
-
-### Process management
-The Orchestrator forks and launches child services using `execl`. Each service gets its own Unix socket file descriptor passed as `argv[1]` — no shared global state, no leaking FDs. `FD_CLOEXEC` ensures file descriptors not explicitly given to a child are automatically closed on `exec`.
-
-Services are managed through `ServiceHandle` (RAII, move-only) and `ServicesRegistry` (single source of truth). The destructor closes the socket and sends `SIGTERM`, then waits. No double-close bugs.
-
-### IPC — Cap'n Proto RPC over Unix domain sockets
-
-All inter-process communication uses **Cap'n Proto RPC**. The schema is defined in `proto/orchestrator.capnp`:
+## IPC — Cap'n Proto schema
 
 ```capnp
 interface MicroService {
@@ -58,7 +93,8 @@ interface MicroService {
 }
 
 interface Validator extends(MicroService) {
-    validateBlock @0 (data :Text) -> (signature :Text);
+    validateBlock @0 (data :Data, signature :Data)
+                  -> (isValid :Bool, validatorSignature :Data);
 }
 
 interface NetworkListener extends(MicroService) {
@@ -66,26 +102,47 @@ interface NetworkListener extends(MicroService) {
 }
 
 interface Orchestrator {
-    getServices            @0 () -> (services :List(Text));
-    connectToValidator     @1 () -> (validator :Validator);
+    getServices              @0 () -> (services :List(Text));
+    connectToValidator       @1 () -> (validator :Validator);
     connectToNetworkListener @2 () -> (listener :NetworkListener);
 }
 ```
 
-Each connection uses a single bidirectional `socketpair`. Both sides use `TwoPartyClient` — the Orchestrator with `Side::CLIENT` (initiates handshake), services with `Side::SERVER` (wait for handshake). After the handshake both sides are symmetric: either can call the other.
+`Data` fields carry raw bytes — no UTF-8 assumptions, no silent corruption of binary signatures.
 
-### Capability broker — bidirectional RPC
+---
 
-The Orchestrator exports itself as a bootstrap capability to each service over the existing socket. This means:
+## What's implemented
 
-- Orchestrator can call `validator.validateBlock()` — it holds a `Validator::Client`
-- Validator can call `orchestrator.connectToValidator()` — it holds an `Orchestrator::Client`
-- NetworkListener can ask for the Validator cap and call it directly through the broker
+### Process management
+The Orchestrator forks and launches child services using `execl`. Each service gets its own Unix socket file descriptor passed as `argv[1]`. `FD_CLOEXEC` ensures no file descriptors leak across `exec` boundaries.
 
-The `OrchestratorImpl` is constructed empty first (before services are spawned), then service clients are injected via setters after connections are established — breaking the circular dependency.
+Services are managed through `ServiceHandle` (RAII, move-only) and `ServicesRegistry` (single source of truth for all running processes). The destructor sends `SIGTERM` and waits — no double-close, no zombie processes.
 
-### Shared memory (dormant, planned)
-`SharedMemory.h/.cpp` and `ipc_common.h` are kept for future use. The plan is to reintroduce shared memory as a fast path for transferring large data chunks between services, while Cap'n Proto RPC handles control flow and capability passing.
+### Cap'n Proto RPC over socketpairs
+Each connection uses a single bidirectional `socketpair`. Both sides use `TwoPartyClient` — the Orchestrator as `Side::CLIENT`, services as `Side::SERVER`. After the handshake both sides are symmetric: either can call the other.
+
+The Orchestrator exports itself as a bootstrap capability to each service. This means:
+- The Validator can call `orchestrator.connectToValidator()` — it holds an `Orchestrator::Client`
+- The NetworkListener can request a `Validator` cap through the broker and call it directly
+
+`OrchestratorImpl` is constructed empty before services are spawned, then service clients are injected via setters after connections are established — breaking the circular dependency cleanly.
+
+### Ed25519 block validation (libsodium)
+
+**Validator:**
+- Holds the NetworkListener's public key — verifies incoming block signatures
+- Expands its own 32-byte private key seed into a 64-byte signing key at startup via `crypto_sign_seed_keypair`
+- On each `validateBlock`:
+  1. `crypto_sign_verify_detached` — verifies the block was signed by the expected listener
+  2. Appends `0x01` (valid) or `0x00` (invalid) to the data
+  3. `crypto_sign_detached` — signs the result with the validator's private key
+  4. Returns `(isValid, validatorSignature)` — tamper-proof
+
+**NetworkListener:**
+- Signs each block with its own private key before forwarding
+- Verifies the validator's signed response — confirms the result came from the right validator
+- Currently sends two hardcoded mock blocks (one valid, one with a corrupted signature) to exercise the full pipeline end-to-end
 
 ---
 
@@ -94,21 +151,20 @@ The `OrchestratorImpl` is constructed empty first (before services are spawned),
 ```
 ├── Orchestrator/
 │   ├── Orchestrator.h/.cpp     # OrchestratorImpl — capability broker
-│   ├── ServiceConnection.h     # spawnAndConnect() helper + ServiceConnection struct
+│   ├── ServiceConnection.h     # spawnAndConnect() helper
 │   └── main.cpp
 ├── Validator/
-│   ├── validator.h/.cpp        # ValidatorImpl — signing/validation logic
+│   ├── validator.h/.cpp        # Ed25519 block validation + response signing
 │   └── main.cpp
 ├── Network_Listener/
-│   ├── NetworkListener.h/.cpp  # NetworkListenerImpl — P2P traffic ingestion
+│   ├── NetworkListener.h/.cpp  # Block signing + validator interaction (C++ RPC shim)
 │   └── main.cpp
 ├── proto/
-│   └── orchestrator.capnp      # Cap'n Proto schema for all interfaces
+│   └── orchestrator.capnp      # Cap'n Proto schema
 ├── ServiceHandle.h/.cpp        # RAII process + socket ownership
 ├── ServicesRegistry.h/.cpp     # Registry of all running services
-├── SharedMemory.h/.cpp         # Shared memory (dormant, planned for future)
-├── ipc_common.h                # Legacy message structs (kept for reference)
-└── ARCHITECTURE.md             # Deep-dive into the capability broker pattern
+├── SharedMemory.h/.cpp         # Shared memory (planned — zero-copy fast path)
+└── ipc_common.h                # Legacy IPC structs (kept for reference)
 ```
 
 ---
@@ -122,23 +178,23 @@ cmake --build .
 ./orchestrator
 ```
 
-Requires CMake 3.20+, a C++20 compiler, and Cap'n Proto. On macOS with Homebrew:
+Requires CMake 3.20+, a C++20 compiler, Cap'n Proto, and libsodium:
 
 ```bash
-brew install capnp
+brew install capnp libsodium   # macOS
 ```
 
 ---
 
 ## What's next
 
-- **Real gossip parsing** — NetworkListener binds an actual UDP/TCP socket and parses P2P gossip messages instead of the current stub.
-- **Nim NetworkListener** — rewrite the listener in Nim to align with the `nim-libp2p` ecosystem, communicating with the C++ Orchestrator over the same Cap'n Proto socket interface.
-- **Shared memory fast path** — reintroduce `SharedMemory` for bulk data transfer between services, using Cap'n Proto only for signalling and capability passing.
+### Phase 1 — Nim NetworkListener (nim-libp2p)
+Rewrite the `NetworkListener` gossip logic in **Nim** using **[nim-libp2p](https://github.com/status-im/nim-libp2p)** — the most complete libp2p implementation outside of Go, maintained by the Status/Nimbus team. The C++ `main.cpp` keeps the socket, the `TwoPartyClient`, and the bootstrap handshake. The gossip handling moves into a Nim shared library exposed via `extern "C"` FFI. Cap'n Proto RPC stays in C++; nim-libp2p handles peer discovery, gossip transport, and message propagation in Nim.
+
+### Phase 2 — mDNS local discovery
+Integrate **mDNS** into the Orchestrator so each node announces `_logos-node._udp` on the local network. Nodes discover each other without a coordinator — the same bootstrap mechanism libp2p uses for local peer discovery.
+
+### Future
+- **Shared memory fast path** — reintroduce `SharedMemory` for bulk data transfer between services. Cap'n Proto handles signalling and capability passing; shared memory handles the data itself. True zero-copy between isolated processes.
 - **Fault tolerance** — Orchestrator detects crashed services via `SIGCHLD` and restarts them automatically.
 
----
-
-## Why
-
-I'm building this to deeply understand the primitives that real microkernel and P2P node runtimes are built on — `fork`/`exec`, `socketpair`, Cap'n Proto capability-based RPC, atomic memory ordering across processes, and ownership semantics in systems code. The kind of stuff that is easy to use incorrectly and hard to debug when you do.
