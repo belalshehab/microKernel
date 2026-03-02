@@ -4,11 +4,16 @@
 
 #include <iostream>
 #include <unistd.h>
+#include <sodium.h>
 #include <capnp/rpc-twoparty.h>
 #include "validator.h"
 #include "orchestrator.capnp.h"
 
 int main(int argc, char* argv[]) {
+    if (sodium_init() < 0) {
+        std::cerr << "[Validator] libsodium init failed\n";
+        return 1;
+    }
     std::cout << "[Validator] Service initialized, PID: " << getpid() << "\n";
 
     if (argc < 2) {

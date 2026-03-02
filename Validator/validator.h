@@ -5,6 +5,8 @@
 #pragma once
 
 #include <capnp/ez-rpc.h>
+#include <sodium.h>
+
 #include "orchestrator.capnp.h"
 
 class ValidatorImpl final: public Validator::Server {
@@ -23,4 +25,7 @@ public:
 private:
     std::string m_name;
     Orchestrator::Client m_orchestrator;
+    uint8_t m_validatorExpandedPrivateKey[crypto_sign_SECRETKEYBYTES];
+    uint8_t m_validatorPublicKey[crypto_sign_PUBLICKEYBYTES];
+    uint8_t m_listenerPublicKey[crypto_sign_PUBLICKEYBYTES];
 };
