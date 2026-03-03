@@ -31,7 +31,6 @@ add_executable(networkListener
         NetworkListener.cpp
         NetworkListener.h
         nim_listener.h
-        nim_listener.cpp
 )
 
 add_dependencies(networkListener nim_listener_lib)
