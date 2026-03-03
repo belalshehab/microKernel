@@ -46,7 +46,8 @@ int main() {
     startListeningRequest.send().wait(ioContext.waitScope);
     std::cout << "[Orchestrator] NetworkListener startListening(12345) OK\n";
 
-    std::cout << "[Orchestrator] Done.\n";
 
+    kj::NEVER_DONE.wait(ioContext.waitScope);
+    std::cout << "[Orchestrator] Done.\n";
     return 0;
 }
