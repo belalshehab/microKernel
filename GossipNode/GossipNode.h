@@ -10,10 +10,10 @@
 #include <mutex>
 #include <vector>
 
-class NetworkListenerImpl final: public NetworkListener::Server {
+class GossipNodeImpl final: public GossipNode::Server {
 
 public:
-    explicit NetworkListenerImpl(kj::StringPtr name);
+    explicit GossipNodeImpl(kj::StringPtr name);
 
     void setOrchestrator(Orchestrator::Client orchestrator) {
         m_orchestrator = kj::mv(orchestrator);
@@ -28,6 +28,6 @@ private:
 
     std::string          m_name;
     Orchestrator::Client m_orchestrator;
-    kj::Own<Validator::Client> m_validator;
+    kj::Own<KeyGuard::Client> m_keyGuard;
     kj::Own<kj::CrossThreadPromiseFulfiller<void>> m_fulfiller;
 };

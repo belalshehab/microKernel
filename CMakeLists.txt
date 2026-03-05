@@ -23,5 +23,5 @@ add_library(sharedMemory SharedMemory.cpp SharedMemory.h)
 
 # ── Services ───────────────────────────────────────────────────────────────────
 add_subdirectory(Orchestrator)
-add_subdirectory(Validator)
-add_subdirectory(Network_Listener)
+add_subdirectory(KeyGuard)
+add_subdirectory(GossipNode)
