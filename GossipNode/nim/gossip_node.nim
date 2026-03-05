@@ -22,3 +22,11 @@ proc nimGossipNodeInit(port: uint16) {.exportc, cdecl.} =
 
 proc nimGossipNodeOnValidated(isValid: bool, keyGuardSignature: ptr uint8, keyGuardSignatureSize: csize_t) {.exportc, cdecl.} =
     echo "[Nim] Validation result: ", isValid, " with KeyGuard signature size: ", keyGuardSignatureSize
+
+
+proc nimGossipNodePublish(
+    senderId: ptr uint8, senderIdSize: csize_t,
+    data: ptr uint8, dataSize: csize_t,
+    signature: ptr uint8, signatureSize: csize_t
+) {.exportc, cdecl.} = 
+    echo "[Nim] Publishing message from sender ID size: ", senderIdSize, " with data size: ", dataSize, " and signature size: ", signatureSize
