@@ -5,9 +5,9 @@ find_path(SODIUM_INCLUDE sodium.h HINTS /opt/homebrew/include REQUIRED)
 
 find_program(NIM_EXECUTABLE nim REQUIRED)
 set(NIM_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/nim)
-set(NIM_SRC_FILE ${NIM_SRC_DIR}/nim_listener.nim)
+set(NIM_SRC_FILE ${NIM_SRC_DIR}/gossip_node.nim)
 set(NIM_OUT_DIR  ${CMAKE_BINARY_DIR}/nimcache)
-set(NIM_LIB      ${NIM_OUT_DIR}/nim_listener.a)
+set(NIM_LIB      ${NIM_OUT_DIR}/gossip_node.a)
 
 add_custom_command(
         OUTPUT  ${NIM_LIB}
@@ -19,31 +19,30 @@ add_custom_command(
         -o:${NIM_LIB}
         ${NIM_SRC_FILE}
         DEPENDS ${NIM_SRC_FILE}
-        COMMENT "Compiling Nim listener..."
+        COMMENT "Compiling Nim GossipNode..."
 )
 
-add_custom_target(nim_listener_lib DEPENDS ${NIM_LIB})
+add_custom_target(nim_gossip_node_lib DEPENDS ${NIM_LIB})
 
 
-# ── NetworkListener executable ────────────────────────────────────────────────
-add_executable(networkListener
+# ── GossipNode executable ─────────────────────────────────────────────────────
+add_executable(gossipNode
         main.cpp
-        NetworkListener.cpp
-        NetworkListener.h
-        nim_listener.h
+        GossipNode.cpp
+        GossipNode.h
+        nim_gossip_node.h
 )
 
-add_dependencies(networkListener nim_listener_lib)
+add_dependencies(gossipNode nim_gossip_node_lib)
 
-target_include_directories(networkListener PRIVATE
+target_include_directories(gossipNode PRIVATE
         ${SODIUM_INCLUDE}
         ${NIM_OUT_DIR}
 )
 
-target_link_libraries(networkListener PRIVATE
+target_link_libraries(gossipNode PRIVATE
         proto
         ${SODIUM_LIB}
         ${NIM_LIB}
         pthread
 )
-

@@ -9,9 +9,9 @@
 
 #include "orchestrator.capnp.h"
 
-class ValidatorImpl final: public Validator::Server {
+class KeyGuardImpl final: public KeyGuard::Server {
 public:
-    explicit ValidatorImpl(kj::StringPtr name);
+    explicit KeyGuardImpl(kj::StringPtr name);
 
     // Called by main() after rpc is constructed and bootstrap() is available
     void setOrchestrator(Orchestrator::Client orchestrator) {
@@ -25,7 +25,7 @@ public:
 private:
     std::string m_name;
     Orchestrator::Client m_orchestrator;
-    uint8_t m_validatorExpandedPrivateKey[crypto_sign_SECRETKEYBYTES];
-    uint8_t m_validatorPublicKey[crypto_sign_PUBLICKEYBYTES];
-    uint8_t m_listenerPublicKey[crypto_sign_PUBLICKEYBYTES];
+    uint8_t m_keyGuardExpandedPrivateKey[crypto_sign_SECRETKEYBYTES];
+    uint8_t m_keyGuardPublicKey[crypto_sign_PUBLICKEYBYTES];
+    uint8_t m_peerPublicKey[crypto_sign_PUBLICKEYBYTES];
 };

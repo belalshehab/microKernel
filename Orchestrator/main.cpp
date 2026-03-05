@@ -17,35 +17,34 @@ int main() {
 
     auto ioContext = kj::setupAsyncIo();
 
-    auto  orchestratorOwned = kj::heap<OrchestratorImpl>();
+    auto orchestratorOwned = kj::heap<OrchestratorImpl>();
     OrchestratorImpl* orchestratorPtr = orchestratorOwned.get();
     Orchestrator::Client orchestratorCap = kj::mv(orchestratorOwned);
 
-    auto validatorConn = spawnAndConnect(services, "validator", "../Validator/validator", ioContext, orchestratorCap);
-    if (!validatorConn) return 1;
+    auto keyGuardConn = spawnAndConnect(services, "keyGuard", "../KeyGuard/keyGuard", ioContext, orchestratorCap);
+    if (!keyGuardConn) return 1;
 
-    auto listenerConn = spawnAndConnect(services, "networkListener", "../Network_Listener/networkListener", ioContext, orchestratorCap);
-    if (!listenerConn) return 1;
+    auto gossipNodeConn = spawnAndConnect(services, "gossipNode", "../GossipNode/gossipNode", ioContext, orchestratorCap);
+    if (!gossipNodeConn) return 1;
 
-    auto validatorClient = validatorConn->getClient<Validator>();
-    auto listenerClient  = listenerConn->getClient<NetworkListener>();
+    auto keyGuardClient  = keyGuardConn->getClient<KeyGuard>();
+    auto gossipNodeClient = gossipNodeConn->getClient<GossipNode>();
 
-    orchestratorPtr->setValidator(validatorConn->getClient<Validator>());
-    orchestratorPtr->setListener(listenerConn->getClient<NetworkListener>());
+    orchestratorPtr->setKeyGuard(keyGuardConn->getClient<KeyGuard>());
+    orchestratorPtr->setGossipNode(gossipNodeConn->getClient<GossipNode>());
 
     // ── Ping both to confirm liveness ─────────────────────────────────────────
-    validatorClient.pingRequest().send().wait(ioContext.waitScope);
-    std::cout << "[Orchestrator] Validator ping OK\n";
+    keyGuardClient.pingRequest().send().wait(ioContext.waitScope);
+    std::cout << "[Orchestrator] KeyGuard ping OK\n";
 
-    listenerClient.pingRequest().send().wait(ioContext.waitScope);
-    std::cout << "[Orchestrator] NetworkListener ping OK\n";
+    gossipNodeClient.pingRequest().send().wait(ioContext.waitScope);
+    std::cout << "[Orchestrator] GossipNode ping OK\n";
 
-    // ── Tell the listener to start — it will call the validator itself ─────────
-    auto startListeningRequest = listenerClient.startListeningRequest();
+    // ── Tell the GossipNode to start — it will call the KeyGuard itself ────────
+    auto startListeningRequest = gossipNodeClient.startListeningRequest();
     startListeningRequest.setPort(12345);
     startListeningRequest.send().wait(ioContext.waitScope);
-    std::cout << "[Orchestrator] NetworkListener startListening(12345) OK\n";
-
+    std::cout << "[Orchestrator] GossipNode startListening(12345) OK\n";
 
     kj::NEVER_DONE.wait(ioContext.waitScope);
     std::cout << "[Orchestrator] Done.\n";
