@@ -9,6 +9,8 @@
 
 #include "orchestrator.capnp.h"
 
+#include <unordered_map>
+
 class KeyGuardImpl final: public KeyGuard::Server {
 public:
     explicit KeyGuardImpl(kj::StringPtr name);
@@ -21,11 +23,14 @@ public:
     kj::Promise<void> getName(GetNameContext context) override;
     kj::Promise<void> ping(PingContext context) override;
     kj::Promise<void> validateBlock(ValidateBlockContext context) override;
+    kj::Promise<void> signData(SignDataContext context) override;
+    kj::Promise<void> addTrustedPeer(AddTrustedPeerContext context) override;
+
 
 private:
     std::string m_name;
     Orchestrator::Client m_orchestrator;
     uint8_t m_keyGuardExpandedPrivateKey[crypto_sign_SECRETKEYBYTES];
     uint8_t m_keyGuardPublicKey[crypto_sign_PUBLICKEYBYTES];
-    uint8_t m_peerPublicKey[crypto_sign_PUBLICKEYBYTES];
+    std::unordered_map<std::string, std::array<uint8_t, crypto_sign_PUBLICKEYBYTES>> m_trustedPeers;
 };

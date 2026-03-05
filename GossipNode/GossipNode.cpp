@@ -16,7 +16,6 @@
 extern "C" void NimMain();
 
 constexpr auto PEER_PRIVATE_KEY   = "b97cd5bf35f02cd8f5f916a4221ca44bc10034342147c16865a54d4807f57c22";
-constexpr auto KEY_GUARD_PUBLIC_KEY = "cde70defd63dde1212450dd3aa92b2d2842bf317561d6d516c2b4031e342ff9a";
 
 struct MockBlock {
     const uint8_t* data;
@@ -109,6 +108,30 @@ kj::Promise<void> GossipNodeImpl::startListening(StartListeningContext context) 
         });
 }
 
+kj::Promise<void> GossipNodeImpl::publishData(PublishDataContext context) {
+    auto data = context.getParams().getData();
+
+    // Copy data into owned buffer so it survives the async chain
+    auto dataVec = kj::heapArray<uint8_t>(data.size());
+    memcpy(dataVec.begin(), data.begin(), data.size());
+
+    auto req = m_keyGuard->signDataRequest();
+    req.setData(capnp::Data::Reader(dataVec.begin(), data.size()));
+
+    return req.send().then([this, dataVec = kj::mv(dataVec)](auto response) -> kj::Promise<void> {
+        auto signature = response.getSignature();
+
+        //TODO: reolace with real node ID once libp2p is integrated
+        const char* senderId = "node-1";
+        nimGossipNodePublish(
+            reinterpret_cast<const uint8_t*>(senderId), strlen(senderId),
+            dataVec.begin(), dataVec.size(),
+            signature.begin(), signature.size()
+            );
+        return kj::READY_NOW;
+    });
+}
+
 kj::Promise<void> GossipNodeImpl::gossipLoop() {
     auto paf = kj::newPromiseAndCrossThreadFulfiller<void>();
     m_fulfiller = kj::mv(paf.fulfiller);
@@ -127,7 +150,9 @@ kj::Promise<void> GossipNodeImpl::gossipLoop() {
         auto msg = req.initMessage();
         msg.setData(capnp::Data::Reader(block.data, block.dataSize));
         msg.setSignature(capnp::Data::Reader(block.signature, block.signatureSize));
-        // senderId left empty for now — will be populated with real peer ID when libp2p is integrated
+        msg.setSenderId(capnp::Data::Reader(
+            reinterpret_cast<const uint8_t*>("node-1"), strlen("node-1")
+            ));
 
         return req.send().then([this](auto response) -> kj::Promise<void> {
             bool isValid = response.getIsValid();

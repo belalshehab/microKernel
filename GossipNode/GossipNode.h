@@ -22,6 +22,7 @@ public:
     kj::Promise<void> getName(GetNameContext context) override;
     kj::Promise<void> ping(PingContext context) override;
     kj::Promise<void> startListening(StartListeningContext context) override;
+    kj::Promise<void> publishData(PublishDataContext context) override;
 
 private:
     kj::Promise<void> gossipLoop();
